@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <queue>
 #include <readline/history.h>
 #include <readline/readline.h>
 #include <regex>
@@ -87,8 +88,46 @@ public:
     }
   }
 
+  std::string downfind(const std::string &target_pattern,
+                       fs::path start = fs::current_path(),
+                       size_t limit = 1000) {
+    size_t search_count = 0;
+    fs::path current = fs::absolute(start);
+    std::queue<fs::path> directories;
+    directories.push(current);
+
+    while (!directories.empty() && search_count < limit) {
+      fs::path dir = directories.front();
+      directories.pop();
+
+      for (const auto &entry : fs::directory_iterator(dir)) {
+        if (entry.is_directory()) {
+          directories.push(entry.path());
+        } else {
+          fs::path rel_path = fs::relative(entry.path(), start);
+          std::string rel_path_str = rel_path.string();
+
+          std::cout << rel_path_str << " | " << target_pattern << std::endl;
+          if (rel_path_str.size() >= target_pattern.size() &&
+              rel_path_str.compare(rel_path_str.size() - target_pattern.size(),
+                                   target_pattern.size(),
+                                   target_pattern) == 0) {
+            return entry.path().string();
+          }
+        }
+
+        search_count++;
+        if (search_count >= limit) {
+          throw std::runtime_error("Search limit reached, target not found.");
+        }
+      }
+    }
+
+    throw std::runtime_error("Target '" + target_pattern + "' not found.");
+  }
+
   std::string transform_command(const std::string &command) {
-    std::regex pattern(R"(<([a-zA-Z0-9_.\-]+))");
+    std::regex pattern(R"((<|>)([a-zA-Z0-9_.\-\/]+))");
     std::string result;
     std::sregex_iterator iter(command.begin(), command.end(), pattern);
     std::sregex_iterator end;
@@ -99,14 +138,23 @@ public:
       std::smatch match = *iter;
       size_t match_pos = match.position(0);
 
+      // Append text before the match
       result += command.substr(last_pos, match_pos - last_pos);
 
-      std::string dirname = match.str(1);
+      char direction = match.str(1)[0];
+      std::string path_pattern = match.str(2);
+
       try {
-        std::string found_path = upfind(dirname);
+        std::string found_path;
+        if (direction == '<') {
+          found_path = upfind(path_pattern);
+        } else if (direction == '>') {
+          found_path = downfind(path_pattern);
+        }
         result += found_path;
       } catch (const std::exception &e) {
-        std::cerr << "[upfind error] " << e.what() << std::endl;
+        std::cerr << "[find error] " << e.what() << std::endl;
+        // If not found, keep original text
         result += match.str(0);
       }
 
@@ -114,6 +162,7 @@ public:
       ++iter;
     }
 
+    // Append remainder of the string
     result += command.substr(last_pos);
     return result;
   }
@@ -201,10 +250,10 @@ public:
         break;
       }
 
-      args.push_back(""); // execvp expects nullptr at the end
       std::vector<char *> exec_args;
       for (auto &arg : args)
         exec_args.push_back(&arg[0]);
+      exec_args.push_back(nullptr); // Add nullptr termination
 
       pid_t pid = fork();
       if (pid < 0) {
@@ -222,7 +271,7 @@ public:
       free(cstr);
     }
 
-    std::cout << "Exiting myshell." << std::endl;
+    std::cout << "Exiting tbsh." << std::endl;
   }
 };
 
